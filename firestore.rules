@@ -1,0 +1,93 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: usuarios
+    // Document ID: {uid}
+    // Fields:
+    //   - uid: string (required)
+    //   - nome: string (required)
+    //   - email: string (required)
+    //   - role: string (required, enum: ['admin', 'funcionario'])
+    //
+    // Collection: pontos
+    // Document ID: auto-generated
+    // Fields:
+    //   - userId: string (required)
+    //   - userName: string (optional)
+    //   - timestamp: timestamp (required)
+    //   - localizacao: latlng (required)
+    //   - endereco: string (optional)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        ((request.auth.token.email == "alailsondeoliveirapng@gmail.com" || request.auth.token.email == "admin@cognitivo.ap") ||
+         get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.role == 'admin');
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+
+    // Domain Validators
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'nome', 'email', 'role']) &&
+             data.keys().hasOnly(['uid', 'nome', 'email', 'role']) &&
+             data.uid is string && data.uid.size() > 0 && data.uid.size() < 128 &&
+             data.nome is string && data.nome.size() > 0 && data.nome.size() < 100 &&
+             data.email is string && data.email.size() < 100 &&
+             data.role in ['admin', 'funcionario'];
+    }
+
+    function isValidPonto(data) {
+      return data.keys().hasAll(['userId', 'timestamp', 'localizacao']) &&
+             data.keys().hasOnly(['userId', 'userName', 'timestamp', 'localizacao', 'endereco']) &&
+             data.userId == request.auth.uid &&
+             data.timestamp is timestamp &&
+             data.localizacao is latlng &&
+             (!('userName' in data) || (data.userName is string && data.userName.size() < 100)) &&
+             (!('endereco' in data) || (data.endereco is string && data.endereco.size() < 500));
+    }
+
+    // Rules
+    match /usuarios/{userId} {
+      // Users can always read their own profile. Admins can read all.
+      allow read: if isOwner(userId) || isAdmin();
+      
+      // Only admins can create or update users (except a user creating their own initial profile if it matches their UID)
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && 
+                    (isAdmin() || isOwner(userId));
+      
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && 
+                    (isAdmin() || (isOwner(userId) && request.resource.data.role == resource.data.role));
+
+      allow delete: if isAdmin();
+    }
+
+    match /pontos/{pontoId} {
+      // Admins can read all, users can read only their own points
+      allow read: if isAuthenticated() && (isAdmin() || resource.data.userId == request.auth.uid);
+      
+      // Any authenticated user can create a point for themselves
+      allow create: if isAuthenticated() && isValidPonto(request.resource.data);
+      
+      // Points should be immutable
+      allow update, delete: if false;
+    }
+  }
+}

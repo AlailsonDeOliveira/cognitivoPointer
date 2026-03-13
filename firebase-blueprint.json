@@ -1,0 +1,39 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "nome": { "type": "string", "description": "Full name" },
+        "email": { "type": "string", "description": "Email address" },
+        "role": { "type": "string", "enum": ["admin", "funcionario"], "description": "User access level" }
+      },
+      "required": ["uid", "nome", "email", "role"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Clock-in record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the employee" },
+        "userName": { "type": "string", "description": "Name of the employee for easy display" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "Time of check-in" },
+        "localizacao": { "type": "object", "description": "GeoPoint coordinates" },
+        "endereco": { "type": "string", "description": "Formatted address from reverse geocoding" }
+      },
+      "required": ["userId", "timestamp", "localizacao"]
+    }
+  },
+  "firestore": {
+    "/usuarios/{uid}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/pontos/{pontoId}": {
+      "schema": "Attendance",
+      "description": "Attendance records"
+    }
+  }
+}

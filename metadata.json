@@ -1,0 +1,7 @@
+{
+  "name": "PontoCerto - Attendance App",
+  "description": "Sistema de controle de ponto com geolocalização para funcionários e painel administrativo.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
