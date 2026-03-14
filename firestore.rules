@@ -70,8 +70,9 @@ service cloud.firestore {
       allow read: if isOwner(userId) || isAdmin();
       
       // Only admins can create or update users (except a user creating their own initial profile if it matches their UID)
+      // Users cannot set their own role to 'admin'
       allow create: if isAuthenticated() && isValidUser(request.resource.data) && 
-                    (isAdmin() || isOwner(userId));
+                    (isAdmin() || (isOwner(userId) && request.resource.data.role == 'funcionario'));
       
       allow update: if isAuthenticated() && isValidUser(request.resource.data) && 
                     (isAdmin() || (isOwner(userId) && request.resource.data.role == resource.data.role));

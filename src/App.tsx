@@ -29,7 +29,8 @@ import {
   Timestamp,
   GeoPoint,
   getDocs,
-  deleteDoc
+  deleteDoc,
+  serverTimestamp
 } from 'firebase/firestore';
 import { initializeApp, getApps } from 'firebase/app';
 import { auth, db } from './firebase';
@@ -98,7 +99,11 @@ const Login = () => {
     setError(null);
     try {
       const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
+      const result = await signInWithPopup(auth, provider);
+      if (result.user.email !== 'alailsondeoliveirapng@gmail.com') {
+        await signOut(auth);
+        setError('Acesso negado: Apenas a conta principal pode fazer login via Google.');
+      }
     } catch (err: any) {
       console.error("Google login error:", err.code);
       setError('Erro ao entrar com Google: ' + err.message);
@@ -330,7 +335,7 @@ const FuncionarioDashboard = () => {
         await addDoc(collection(db, 'pontos'), {
           userId: user?.uid,
           userName: profile?.nome,
-          timestamp: Timestamp.now(),
+          timestamp: serverTimestamp(),
           localizacao: new GeoPoint(latitude, longitude),
           endereco
         });
@@ -344,7 +349,7 @@ const FuncionarioDashboard = () => {
     }, (err) => {
       setStatus({ type: 'error', msg: 'Permissão de localização negada.' });
       setCheckingIn(false);
-    });
+    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
   };
 
   return (
@@ -461,6 +466,7 @@ const AdminDashboard = () => {
   const [employees, setEmployees] = useState<UserProfile[]>([]);
   const [allRecords, setAllRecords] = useState<AttendanceRecord[]>([]);
   const [search, setSearch] = useState('');
+  const [selectedMapRecord, setSelectedMapRecord] = useState<AttendanceRecord | null>(null);
   
   // New employee state
   const [newEmail, setNewEmail] = useState('');
@@ -653,9 +659,20 @@ const AdminDashboard = () => {
                           </div>
                         </td>
                         <td className="px-6 py-4">
-                          <p className="text-xs text-zinc-500 max-w-[200px] truncate" title={record.endereco}>
-                            {record.endereco}
-                          </p>
+                          <div className="flex items-center gap-2">
+                            <p className="text-xs text-zinc-500 max-w-[200px] truncate" title={record.endereco}>
+                              {record.endereco}
+                            </p>
+                            {record.localizacao && (
+                              <button 
+                                onClick={() => setSelectedMapRecord(record)}
+                                className="p-1.5 bg-teal-50 text-teal-600 rounded-lg hover:bg-teal-100 transition-colors"
+                                title="Ver no mapa"
+                              >
+                                <MapPin className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -875,6 +892,55 @@ const AdminDashboard = () => {
                 >
                   Confirmar
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Map Modal */}
+      <AnimatePresence>
+        {selectedMapRecord && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setSelectedMapRecord(null)}>
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl shadow-2xl overflow-hidden w-full max-w-2xl border border-zinc-100"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="p-4 border-b border-zinc-100 flex justify-between items-center bg-zinc-50">
+                <div>
+                  <h3 className="font-bold text-zinc-900">Localização do Ponto</h3>
+                  <p className="text-xs text-zinc-500">{selectedMapRecord.userName} - {selectedMapRecord.timestamp?.toDate().toLocaleString()}</p>
+                </div>
+                <button 
+                  onClick={() => setSelectedMapRecord(null)}
+                  className="w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-zinc-700 hover:bg-zinc-200 rounded-xl transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="w-full h-[400px] bg-zinc-100 relative">
+                {selectedMapRecord.localizacao ? (
+                  <iframe 
+                    width="100%" 
+                    height="100%" 
+                    frameBorder="0" 
+                    scrolling="no" 
+                    marginHeight={0} 
+                    marginWidth={0} 
+                    src={`https://www.openstreetmap.org/export/embed.html?bbox=${selectedMapRecord.localizacao.longitude - 0.005},${selectedMapRecord.localizacao.latitude - 0.005},${selectedMapRecord.localizacao.longitude + 0.005},${selectedMapRecord.localizacao.latitude + 0.005}&layer=mapnik&marker=${selectedMapRecord.localizacao.latitude},${selectedMapRecord.localizacao.longitude}`}
+                  ></iframe>
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center text-zinc-400">
+                    Localização não disponível
+                  </div>
+                )}
+              </div>
+              <div className="p-4 bg-zinc-50 border-t border-zinc-100 text-sm text-zinc-600 flex items-start gap-2">
+                <MapPin className="w-5 h-5 text-teal-600 shrink-0" />
+                <p>{selectedMapRecord.endereco}</p>
               </div>
             </motion.div>
           </div>
