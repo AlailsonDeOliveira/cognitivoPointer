@@ -18,3 +18,11 @@ export interface AttendanceRecord {
   };
   endereco: string;
 }
+
+export interface AllowedLocation {
+  id?: string;
+  nome: string;
+  latitude: number;
+  longitude: number;
+  raio: number; // in meters
+}

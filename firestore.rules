@@ -90,5 +90,10 @@ service cloud.firestore {
       // Points should be immutable
       allow update, delete: if false;
     }
+
+    match /locais_permitidos/{localId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
   }
 }

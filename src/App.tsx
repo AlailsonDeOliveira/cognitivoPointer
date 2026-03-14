@@ -34,7 +34,7 @@ import {
 } from 'firebase/firestore';
 import { initializeApp, getApps } from 'firebase/app';
 import { auth, db } from './firebase';
-import { UserProfile, AttendanceRecord, UserRole } from './types';
+import { UserProfile, AttendanceRecord, UserRole, AllowedLocation } from './types';
 import { 
   LogOut, 
   MapPin, 
@@ -55,7 +55,22 @@ import {
   Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { MapContainer, TileLayer, Marker, useMapEvents, Circle, useMap } from 'react-leaflet';
+import L from 'leaflet';
 import firebaseConfig from '../firebase-applet-config.json';
+
+// Fix leaflet default icon issue
+import icon from 'leaflet/dist/images/marker-icon.png';
+import iconShadow from 'leaflet/dist/images/marker-shadow.png';
+
+let DefaultIcon = L.icon({
+    iconUrl: icon,
+    shadowUrl: iconShadow,
+    iconSize: [25, 41],
+    iconAnchor: [12, 41]
+});
+
+L.Marker.prototype.options.icon = DefaultIcon;
 
 // --- Context ---
 interface AuthContextType {
@@ -293,8 +308,11 @@ const Login = () => {
 const FuncionarioDashboard = () => {
   const { profile, user } = useContext(AuthContext);
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
+  const [allowedLocations, setAllowedLocations] = useState<AllowedLocation[]>([]);
   const [checkingIn, setCheckingIn] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
+  const [showWarningModal, setShowWarningModal] = useState(false);
+  const [lastRecordTimeStr, setLastRecordTimeStr] = useState('');
 
   useEffect(() => {
     if (!user) return;
@@ -308,7 +326,47 @@ const FuncionarioDashboard = () => {
     });
   }, [user]);
 
-  const handleCheckIn = async () => {
+  useEffect(() => {
+    const qLoc = query(collection(db, 'locais_permitidos'));
+    return onSnapshot(qLoc, (snapshot) => {
+      setAllowedLocations(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AllowedLocation)));
+    });
+  }, []);
+
+  // Haversine formula to calculate distance in meters
+  const getDistanceInMeters = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371000; // Earth radius in meters
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
+    const a = 
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * 
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  const initiateCheckIn = () => {
+    if (records.length > 0) {
+      const lastRecord = records[0];
+      if (lastRecord.timestamp) {
+        const lastTimeMs = lastRecord.timestamp.toMillis();
+        const nowMs = Date.now();
+        const diffMins = (nowMs - lastTimeMs) / (1000 * 60);
+        
+        if (diffMins < 30) {
+          const timeStr = lastRecord.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          setLastRecordTimeStr(timeStr);
+          setShowWarningModal(true);
+          return;
+        }
+      }
+    }
+    executeCheckIn();
+  };
+
+  const executeCheckIn = async () => {
+    setShowWarningModal(false);
     setCheckingIn(true);
     setStatus(null);
     
@@ -322,6 +380,24 @@ const FuncionarioDashboard = () => {
       try {
         const { latitude, longitude } = position.coords;
         
+        // Check geofencing if there are allowed locations
+        if (allowedLocations.length > 0) {
+          let isWithinAnyLocation = false;
+          for (const loc of allowedLocations) {
+            const distance = getDistanceInMeters(latitude, longitude, loc.latitude, loc.longitude);
+            if (distance <= loc.raio) {
+              isWithinAnyLocation = true;
+              break;
+            }
+          }
+          
+          if (!isWithinAnyLocation) {
+            setStatus({ type: 'error', msg: 'Você está fora da área permitida para bater ponto.' });
+            setCheckingIn(false);
+            return;
+          }
+        }
+
         // Reverse geocoding (Nominatim)
         let endereco = 'Localização desconhecida';
         try {
@@ -380,8 +456,9 @@ const FuncionarioDashboard = () => {
           <div className="w-32 h-32 rounded-full bg-teal-50 flex items-center justify-center relative shadow-inner">
             <motion.div 
               className="absolute inset-0 rounded-full border-4 border-teal-100 border-t-teal-600"
-              animate={checkingIn ? { rotate: 360 } : { rotate: 0 }}
-              transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+              style={{ willChange: 'transform' }}
+              animate={{ rotate: 360 }}
+              transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
             />
             <MapPin className="w-12 h-12 text-teal-600" />
           </div>
@@ -391,7 +468,7 @@ const FuncionarioDashboard = () => {
         <p className="text-zinc-500 text-sm mb-8 max-w-xs relative z-10">Sua localização será capturada automaticamente para validar o registro.</p>
 
         <button 
-          onClick={handleCheckIn}
+          onClick={initiateCheckIn}
           disabled={checkingIn}
           className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-4 rounded-2xl transition-all shadow-lg shadow-teal-600/20 flex items-center justify-center gap-2 disabled:opacity-70 relative z-10 text-lg"
         >
@@ -409,6 +486,42 @@ const FuncionarioDashboard = () => {
           </motion.div>
         )}
       </motion.div>
+
+      {/* 30-min Warning Modal */}
+      <AnimatePresence>
+        {showWarningModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl border border-zinc-100"
+            >
+              <div className="w-16 h-16 bg-amber-50 rounded-2xl flex items-center justify-center text-amber-600 mx-auto mb-6 border border-amber-100">
+                <AlertCircle className="w-8 h-8" />
+              </div>
+              <h3 className="text-xl font-bold text-zinc-900 text-center mb-2">Atenção</h3>
+              <p className="text-zinc-500 text-center mb-8 text-sm">
+                Você pretende bater o ponto novamente? Seu último batimento foi às <strong>{lastRecordTimeStr}</strong>.
+              </p>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setShowWarningModal(false)}
+                  className="flex-1 py-3 rounded-xl font-bold text-zinc-500 hover:bg-zinc-100 transition-all active:scale-[0.98]"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={executeCheckIn}
+                  className="flex-1 py-3 rounded-xl font-bold bg-amber-500 text-white hover:bg-amber-600 transition-all shadow-lg shadow-amber-500/20 active:scale-[0.98]"
+                >
+                  Confirmar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <section>
         <div className="flex items-center justify-between mb-6">
@@ -458,9 +571,58 @@ const FuncionarioDashboard = () => {
   );
 };
 
+const LocationPickerMap = ({ lat, lng, radius, onLocationSelect }: { lat: string, lng: string, radius: string, onLocationSelect: (lat: string, lng: string) => void }) => {
+  const defaultCenter: [number, number] = [-23.5505, -46.6333]; // Sao Paulo default
+  const center: [number, number] = lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng)) 
+    ? [parseFloat(lat), parseFloat(lng)] 
+    : defaultCenter;
+
+  const MapEvents = () => {
+    useMapEvents({
+      click(e) {
+        onLocationSelect(e.latlng.lat.toFixed(6), e.latlng.lng.toFixed(6));
+      },
+    });
+    return null;
+  };
+
+  const MapUpdater = ({ center }: { center: [number, number] }) => {
+    const map = useMap();
+    useEffect(() => {
+      map.setView(center, map.getZoom());
+    }, [center, map]);
+    return null;
+  };
+
+  return (
+    <div className="w-full h-[250px] rounded-xl overflow-hidden border border-zinc-200 relative z-0 mb-4">
+      <MapContainer center={center} zoom={13} style={{ height: '100%', width: '100%' }}>
+        <TileLayer
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        />
+        {lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng)) && (
+          <>
+            <Marker position={[parseFloat(lat), parseFloat(lng)]} />
+            {!isNaN(parseFloat(radius)) && (
+              <Circle 
+                center={[parseFloat(lat), parseFloat(lng)]} 
+                radius={parseFloat(radius)} 
+                pathOptions={{ color: '#0d9488', fillColor: '#14b8a6', fillOpacity: 0.2 }} 
+              />
+            )}
+          </>
+        )}
+        <MapEvents />
+        <MapUpdater center={center} />
+      </MapContainer>
+    </div>
+  );
+};
+
 const AdminDashboard = () => {
   const { profile, user } = useContext(AuthContext);
-  const [activeTab, setActiveTab] = useState<'users' | 'history' | 'profile'>('history');
+  const [activeTab, setActiveTab] = useState<'users' | 'history' | 'profile' | 'locations'>('history');
   const [newAdminPassword, setNewAdminPassword] = useState('');
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
   const [employees, setEmployees] = useState<UserProfile[]>([]);
@@ -476,6 +638,28 @@ const AdminDashboard = () => {
   const [userToDelete, setUserToDelete] = useState<UserProfile | null>(null);
   const [msg, setMsg] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
+  // Locations state
+  const [locations, setLocations] = useState<AllowedLocation[]>([]);
+  const [newLocName, setNewLocName] = useState('');
+  const [newLocLat, setNewLocLat] = useState('');
+  const [newLocLng, setNewLocLng] = useState('');
+  const [newLocRadius, setNewLocRadius] = useState('100');
+  const [isCreatingLoc, setIsCreatingLoc] = useState(false);
+  const [locMsg, setLocMsg] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+
+  useEffect(() => {
+    if (activeTab === 'locations' && !newLocLat && !newLocLng) {
+      if ('geolocation' in navigator) {
+        navigator.geolocation.getCurrentPosition((position) => {
+          setNewLocLat(position.coords.latitude.toFixed(6));
+          setNewLocLng(position.coords.longitude.toFixed(6));
+        }, (error) => {
+          console.error("Error getting location:", error);
+        });
+      }
+    }
+  }, [activeTab, newLocLat, newLocLng]);
+
   useEffect(() => {
     const qUsers = query(collection(db, 'usuarios'), where('role', '==', 'funcionario'));
     const unsubUsers = onSnapshot(qUsers, (snap) => {
@@ -487,7 +671,12 @@ const AdminDashboard = () => {
       setAllRecords(snap.docs.map(d => ({ id: d.id, ...d.data() } as AttendanceRecord)));
     });
 
-    return () => { unsubUsers(); unsubRecords(); };
+    const qLocs = query(collection(db, 'locais_permitidos'));
+    const unsubLocs = onSnapshot(qLocs, (snap) => {
+      setLocations(snap.docs.map(d => ({ id: d.id, ...d.data() } as AllowedLocation)));
+    });
+
+    return () => { unsubUsers(); unsubRecords(); unsubLocs(); };
   }, []);
 
   const handleCreateEmployee = async (e: React.FormEvent) => {
@@ -572,6 +761,34 @@ const AdminDashboard = () => {
     }
   };
 
+  const handleCreateLocation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsCreatingLoc(true);
+    setLocMsg(null);
+    try {
+      await addDoc(collection(db, 'locais_permitidos'), {
+        nome: newLocName,
+        latitude: parseFloat(newLocLat),
+        longitude: parseFloat(newLocLng),
+        raio: parseInt(newLocRadius)
+      });
+      setLocMsg({ type: 'success', text: 'Local cadastrado com sucesso!' });
+      setNewLocName(''); setNewLocLat(''); setNewLocLng(''); setNewLocRadius('100');
+    } catch (err: any) {
+      setLocMsg({ type: 'error', text: 'Erro ao cadastrar local: ' + err.message });
+    } finally {
+      setIsCreatingLoc(false);
+    }
+  };
+
+  const handleDeleteLocation = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'locais_permitidos', id));
+    } catch (err: any) {
+      console.error("Error deleting location", err);
+    }
+  };
+
   const filteredRecords = allRecords.filter(r => 
     r.userName?.toLowerCase().includes(search.toLowerCase())
   );
@@ -604,6 +821,13 @@ const AdminDashboard = () => {
           Equipe
         </button>
         <button 
+          onClick={() => setActiveTab('locations')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl font-semibold transition-all ${activeTab === 'locations' ? 'bg-white shadow-sm text-teal-600' : 'text-zinc-500 hover:text-zinc-700'}`}
+        >
+          <MapPin className="w-4 h-4" />
+          Locais
+        </button>
+        <button 
           onClick={() => setActiveTab('profile')}
           className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl font-semibold transition-all ${activeTab === 'profile' ? 'bg-white shadow-sm text-teal-600' : 'text-zinc-500 hover:text-zinc-700'}`}
         >
@@ -616,9 +840,9 @@ const AdminDashboard = () => {
         {activeTab === 'history' && (
           <motion.div 
             key="history"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
           >
             <div className="relative mb-6">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-400" />
@@ -691,9 +915,9 @@ const AdminDashboard = () => {
         {activeTab === 'users' && (
           <motion.div 
             key="users"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             className="grid md:grid-cols-2 gap-8"
           >
             <div className="bg-white p-8 rounded-3xl border border-zinc-100 shadow-xl shadow-zinc-200/40">
@@ -804,12 +1028,146 @@ const AdminDashboard = () => {
           </motion.div>
         )}
 
+        {activeTab === 'locations' && (
+          <motion.div 
+            key="locations"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="grid md:grid-cols-2 gap-8"
+          >
+            <div className="bg-white p-8 rounded-3xl border border-zinc-100 shadow-xl shadow-zinc-200/40">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-2.5 bg-teal-50 rounded-xl border border-teal-100">
+                  <MapPin className="w-5 h-5 text-teal-600" />
+                </div>
+                <h3 className="text-xl font-bold text-zinc-900">Novo Local Permitido</h3>
+              </div>
+
+              <form onSubmit={handleCreateLocation} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-500 uppercase mb-1 ml-1">Nome do Local</label>
+                  <input 
+                    type="text" required placeholder="Ex: Sede Principal"
+                    className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-teal-500 outline-none bg-zinc-50 focus:bg-white transition-all"
+                    value={newLocName} onChange={e => setNewLocName(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-500 uppercase mb-2 ml-1">Selecione no Mapa ou Digite</label>
+                  <LocationPickerMap 
+                    lat={newLocLat} 
+                    lng={newLocLng} 
+                    radius={newLocRadius}
+                    onLocationSelect={(lat, lng) => {
+                      setNewLocLat(lat);
+                      setNewLocLng(lng);
+                    }} 
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-500 uppercase mb-1 ml-1">Latitude</label>
+                    <input 
+                      type="number" step="any" required placeholder="-23.5505"
+                      className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-teal-500 outline-none bg-zinc-50 focus:bg-white transition-all"
+                      value={newLocLat} onChange={e => setNewLocLat(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-500 uppercase mb-1 ml-1">Longitude</label>
+                    <input 
+                      type="number" step="any" required placeholder="-46.6333"
+                      className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-teal-500 outline-none bg-zinc-50 focus:bg-white transition-all"
+                      value={newLocLng} onChange={e => setNewLocLng(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-500 uppercase mb-1 ml-1 flex justify-between">
+                    <span>Raio Permitido (metros)</span>
+                    <span className="text-teal-600 font-bold">{newLocRadius}m</span>
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <input 
+                      type="range" min="10" max="5000" step="10"
+                      className="flex-1 h-2 bg-zinc-200 rounded-lg appearance-none cursor-pointer accent-teal-600"
+                      value={newLocRadius} onChange={e => setNewLocRadius(e.target.value)}
+                    />
+                    <input 
+                      type="number" required min="10"
+                      className="w-24 px-3 py-2 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-teal-500 outline-none bg-zinc-50 focus:bg-white transition-all text-center"
+                      value={newLocRadius} onChange={e => setNewLocRadius(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {locMsg && (
+                  <div className={`flex items-center gap-2 text-sm p-3 rounded-xl ${locMsg.type === 'success' ? 'bg-teal-50 text-teal-700 border border-teal-100' : 'bg-red-50 text-red-700 border border-red-100'}`}>
+                    {locMsg.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+                    <span>{locMsg.text}</span>
+                  </div>
+                )}
+
+                <button 
+                  type="submit" disabled={isCreatingLoc}
+                  className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-teal-600/20 flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+                >
+                  {isCreatingLoc ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Cadastrar Local'}
+                </button>
+              </form>
+            </div>
+
+            <div className="bg-white p-8 rounded-3xl border border-zinc-100 shadow-xl shadow-zinc-200/40">
+              <h3 className="text-xl font-bold text-zinc-900 mb-6 flex items-center gap-2">
+                <MapPin className="w-5 h-5 text-teal-600" />
+                Locais Cadastrados
+              </h3>
+              <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
+                {locations.length === 0 ? (
+                  <p className="text-center text-zinc-400 py-8">Nenhum local cadastrado. O ponto pode ser batido de qualquer lugar.</p>
+                ) : (
+                  locations.map(loc => (
+                    <div key={loc.id} className="p-4 rounded-2xl bg-zinc-50 border border-zinc-100 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm">
+                            <MapPin className="w-5 h-5 text-zinc-400" />
+                          </div>
+                          <div>
+                            <p className="font-bold text-zinc-900 text-sm">{loc.nome}</p>
+                            <p className="text-zinc-500 text-xs">Raio: {loc.raio}m</p>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => loc.id && handleDeleteLocation(loc.id)}
+                          className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                          title="Excluir Local"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="flex gap-2 text-xs text-zinc-500 bg-white p-2 rounded-lg border border-zinc-100">
+                        <span>Lat: {loc.latitude}</span>
+                        <span>|</span>
+                        <span>Lng: {loc.longitude}</span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+
         {activeTab === 'profile' && (
           <motion.div 
             key="profile"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             className="max-w-md mx-auto"
           >
             <div className="bg-white p-8 rounded-3xl border border-zinc-100 shadow-xl shadow-zinc-200/40 text-center">
@@ -901,11 +1259,17 @@ const AdminDashboard = () => {
       {/* Map Modal */}
       <AnimatePresence>
         {selectedMapRecord && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setSelectedMapRecord(null)}>
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" 
+            onClick={() => setSelectedMapRecord(null)}
+          >
             <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
               className="bg-white rounded-3xl shadow-2xl overflow-hidden w-full max-w-2xl border border-zinc-100"
               onClick={e => e.stopPropagation()}
             >
@@ -943,7 +1307,7 @@ const AdminDashboard = () => {
                 <p>{selectedMapRecord.endereco}</p>
               </div>
             </motion.div>
-          </div>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>
