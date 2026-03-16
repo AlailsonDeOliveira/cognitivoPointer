@@ -5,6 +5,14 @@ export interface UserProfile {
   nome: string;
   email: string;
   role: UserRole;
+  cpf?: string;
+  pis?: string;
+}
+
+export interface AppConfig {
+  companyName: string;
+  cnpj: string;
+  address: string;
 }
 
 export interface AttendanceRecord {

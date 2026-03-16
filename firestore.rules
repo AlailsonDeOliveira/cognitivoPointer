@@ -13,6 +13,8 @@ service cloud.firestore {
     //   - nome: string (required)
     //   - email: string (required)
     //   - role: string (required, enum: ['admin', 'funcionario'])
+    //   - cpf: string (optional)
+    //   - pis: string (optional)
     //
     // Collection: pontos
     // Document ID: auto-generated
@@ -22,6 +24,17 @@ service cloud.firestore {
     //   - timestamp: timestamp (required)
     //   - localizacao: latlng (required)
     //   - endereco: string (optional)
+    //   - userCPF: string (optional)
+    //   - userPIS: string (optional)
+    //   - companyCNPJ: string (optional)
+    //   - companyName: string (optional)
+    //
+    // Collection: config
+    // Document ID: app
+    // Fields:
+    //   - companyName: string
+    //   - cnpj: string
+    //   - address: string
     //
     // ===============================================================
 
@@ -46,22 +59,39 @@ service cloud.firestore {
 
     // Domain Validators
     function isValidUser(data) {
-      return data.keys().hasAll(['uid', 'nome', 'email', 'role']) &&
-             data.keys().hasOnly(['uid', 'nome', 'email', 'role']) &&
+      let requiredFields = ['uid', 'nome', 'email', 'role'];
+      let allowedFields = ['uid', 'nome', 'email', 'role', 'cpf', 'pis'];
+      return data.keys().hasAll(requiredFields) &&
+             data.keys().hasOnly(allowedFields) &&
              data.uid is string && data.uid.size() > 0 && data.uid.size() < 128 &&
              data.nome is string && data.nome.size() > 0 && data.nome.size() < 100 &&
              data.email is string && data.email.size() < 100 &&
-             data.role in ['admin', 'funcionario'];
+             data.role in ['admin', 'funcionario'] &&
+             (!('cpf' in data) || (data.cpf is string && data.cpf.size() <= 14)) &&
+             (!('pis' in data) || (data.pis is string && data.pis.size() <= 14));
     }
 
     function isValidPonto(data) {
-      return data.keys().hasAll(['userId', 'timestamp', 'localizacao']) &&
-             data.keys().hasOnly(['userId', 'userName', 'timestamp', 'localizacao', 'endereco']) &&
+      let requiredFields = ['userId', 'timestamp', 'localizacao'];
+      let allowedFields = ['userId', 'userName', 'timestamp', 'localizacao', 'endereco', 'userCPF', 'userPIS', 'companyCNPJ', 'companyName'];
+      return data.keys().hasAll(requiredFields) &&
+             data.keys().hasOnly(allowedFields) &&
              data.userId == request.auth.uid &&
              data.timestamp is timestamp &&
              data.localizacao is latlng &&
              (!('userName' in data) || (data.userName is string && data.userName.size() < 100)) &&
-             (!('endereco' in data) || (data.endereco is string && data.endereco.size() < 500));
+             (!('endereco' in data) || (data.endereco is string && data.endereco.size() < 500)) &&
+             (!('userCPF' in data) || (data.userCPF is string)) &&
+             (!('userPIS' in data) || (data.userPIS is string)) &&
+             (!('companyCNPJ' in data) || (data.companyCNPJ is string)) &&
+             (!('companyName' in data) || (data.companyName is string));
+    }
+
+    function isValidConfig(data) {
+      return data.keys().hasAll(['companyName', 'cnpj', 'address']) &&
+             data.companyName is string &&
+             data.cnpj is string &&
+             data.address is string;
     }
 
     // Rules
@@ -94,6 +124,11 @@ service cloud.firestore {
     match /locais_permitidos/{localId} {
       allow read: if isAuthenticated();
       allow write: if isAdmin();
+    }
+
+    match /config/{configId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() && isValidConfig(request.resource.data);
     }
   }
 }

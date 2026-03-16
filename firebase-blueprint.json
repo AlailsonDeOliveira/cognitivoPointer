@@ -8,7 +8,9 @@
         "uid": { "type": "string", "description": "Firebase Auth UID" },
         "nome": { "type": "string", "description": "Full name" },
         "email": { "type": "string", "description": "Email address" },
-        "role": { "type": "string", "enum": ["admin", "funcionario"], "description": "User access level" }
+        "role": { "type": "string", "enum": ["admin", "funcionario"], "description": "User access level" },
+        "cpf": { "type": "string", "description": "Brazilian CPF" },
+        "pis": { "type": "string", "description": "Brazilian PIS/NIT" }
       },
       "required": ["uid", "nome", "email", "role"]
     },
@@ -21,9 +23,24 @@
         "userName": { "type": "string", "description": "Name of the employee for easy display" },
         "timestamp": { "type": "string", "format": "date-time", "description": "Time of check-in" },
         "localizacao": { "type": "object", "description": "GeoPoint coordinates" },
-        "endereco": { "type": "string", "description": "Formatted address from reverse geocoding" }
+        "endereco": { "type": "string", "description": "Formatted address from reverse geocoding" },
+        "userCPF": { "type": "string", "description": "Employee CPF at time of record" },
+        "userPIS": { "type": "string", "description": "Employee PIS at time of record" },
+        "companyCNPJ": { "type": "string", "description": "Company CNPJ at time of record" },
+        "companyName": { "type": "string", "description": "Company Name at time of record" }
       },
       "required": ["userId", "timestamp", "localizacao"]
+    },
+    "AppConfig": {
+      "title": "AppConfig",
+      "description": "Company configuration",
+      "type": "object",
+      "properties": {
+        "companyName": { "type": "string" },
+        "cnpj": { "type": "string" },
+        "address": { "type": "string" }
+      },
+      "required": ["companyName", "cnpj", "address"]
     }
   },
   "firestore": {
@@ -34,6 +51,10 @@
     "/pontos/{pontoId}": {
       "schema": "Attendance",
       "description": "Attendance records"
+    },
+    "/config/app": {
+      "schema": "AppConfig",
+      "description": "Company settings"
     }
   }
 }
